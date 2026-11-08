@@ -1,0 +1,265 @@
+--[[
+	Kiciahook key window  |  Roblox executor (Luau)  |  UI only: no key check, no network
+
+	Built from pixel measurements of the screenshot (borders, fills, text positions).
+	Native size is 301x246. The screenshot is zoomed ~1.43x (every size lands on
+	whole numbers at x0.7), so SCALE = 1 is true size and SCALE = 10/7 makes it
+	as big as the pic looks.
+
+	Run: paste into your executor and execute. Re-executing replaces the old window.
+]]
+
+local Players          = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui          = game:GetService("CoreGui")
+local HttpService      = game:GetService("HttpService")
+
+---------------------------------------------------------------- config
+local TITLE           = "Kiciahook"
+local LINKVERTISE_URL = "https://linkvertise.com/your-link"
+local LOOTLABS_URL    = "https://lootlabs.gg/your-link"
+local DISCORD_URL     = "https://discord.gg/your-invite"
+local FOOTER_TEXT     = ""                 -- centered line under the box (cut off in the pic)
+local SCALE           = 1                  -- 10/7 = same size as the pic
+local FONT_FILE       = "ProggyClean.ttf"  -- optional: drop it in your executor's workspace folder
+
+local function onConfirm(key)
+	-- put your key check here
+	print("key submitted:", key)
+end
+
+---------------------------------------------------------------- colors (sampled from the pic)
+local C = {
+	outline  = Color3.fromRGB(12, 12, 12),
+	border   = Color3.fromRGB(47, 47, 47),
+	window   = Color3.fromRGB(20, 20, 20),
+	titlebar = Color3.fromRGB(23, 23, 23),
+	accent   = Color3.fromRGB(169, 195, 213),
+	group    = Color3.fromRGB(28, 28, 28),
+	widget   = Color3.fromRGB(33, 33, 33),
+	inner    = Color3.fromRGB(11, 11, 11),
+	hover    = Color3.fromRGB(41, 41, 41),
+	press    = Color3.fromRGB(26, 26, 26),
+	text     = Color3.fromRGB(255, 255, 255),
+	hint     = Color3.fromRGB(195, 195, 195),
+}
+
+local W, H = 301, 246
+
+---------------------------------------------------------------- font
+-- The pic uses imgui's ProggyClean (13px body, 15px title). Roblox can't ship it, so:
+-- if ProggyClean.ttf is in the executor workspace it gets loaded, otherwise RobotoMono
+-- at a size that matches the character width.
+local function loadFont()
+	local ok, font = pcall(function()
+		if typeof(isfile) ~= "function" or typeof(writefile) ~= "function" or typeof(getcustomasset) ~= "function" then
+			return nil
+		end
+		if not isfile(FONT_FILE) then return nil end
+		writefile("KeyUIFont.json", HttpService:JSONEncode({
+			name = "KeyUIFont",
+			faces = { { name = "Regular", weight = 400, style = "normal", assetId = getcustomasset(FONT_FILE) } },
+		}))
+		return Font.new(getcustomasset("KeyUIFont.json"))
+	end)
+	if ok and font then return font, 13, 15 end
+	return Font.fromEnum(Enum.Font.RobotoMono), 12, 13
+end
+local FONT, BODY, HEAD = loadFont()
+
+---------------------------------------------------------------- helpers
+local function frame(parent, x, y, w, h, color)
+	local f = Instance.new("Frame")
+	f.BorderSizePixel = 0
+	f.BackgroundColor3 = color
+	f.Position = UDim2.fromOffset(x, y)
+	f.Size = UDim2.fromOffset(w, h)
+	f.Parent = parent
+	return f
+end
+
+-- stacked 1px rings: first color is the outermost ring, last color is the fill
+local function layered(parent, x, y, w, h, colors)
+	local outer = frame(parent, x, y, w, h, colors[1])
+	local inner, iw, ih = outer, w, h
+	for i = 2, #colors do
+		iw, ih = iw - 2, ih - 2
+		inner = frame(inner, 1, 1, iw, ih, colors[i])
+	end
+	return outer, inner
+end
+
+local function text(parent, str, x, y, w, h, size, align)
+	local l = Instance.new("TextLabel")
+	l.BackgroundTransparency = 1
+	l.BorderSizePixel = 0
+	l.FontFace = FONT
+	l.TextSize = size
+	l.Text = str
+	l.TextColor3 = C.text
+	l.TextXAlignment = align or Enum.TextXAlignment.Left
+	l.TextYAlignment = Enum.TextYAlignment.Center
+	l.Position = UDim2.fromOffset(x, y)
+	l.Size = UDim2.fromOffset(w, h)
+	l.ZIndex = 3
+	l.Parent = parent
+	return l
+end
+
+local function copy(str)
+	local fn = setclipboard or toclipboard or set_clipboard or (syn and syn.write_clipboard)
+	if fn then pcall(fn, str) end
+end
+
+local function getParent()
+	if typeof(gethui) == "function" then
+		local ok, h = pcall(gethui)
+		if ok and h then return h end
+	end
+	if pcall(function() return #CoreGui:GetChildren() end) then return CoreGui end
+	return Players.LocalPlayer:WaitForChild("PlayerGui")
+end
+
+---------------------------------------------------------------- gui root
+local parent = getParent()
+local old = parent:FindFirstChild("KeyUI")
+if old then old:Destroy() end
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "KeyUI"
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.DisplayOrder = 999
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+if typeof(syn) == "table" and syn.protect_gui then pcall(syn.protect_gui, gui) end
+gui.Parent = parent
+
+local holder = Instance.new("Frame") -- unscaled shell, this is what gets dragged
+holder.BackgroundTransparency = 1
+holder.BorderSizePixel = 0
+holder.Size = UDim2.fromOffset(W * SCALE, H * SCALE)
+local cam = workspace.CurrentCamera
+if cam then
+	local vp = cam.ViewportSize
+	holder.Position = UDim2.fromOffset(math.floor((vp.X - W * SCALE) / 2), math.floor((vp.Y - H * SCALE) / 2))
+else
+	holder.AnchorPoint = Vector2.new(0.5, 0.5)
+	holder.Position = UDim2.fromScale(0.5, 0.5)
+end
+holder.Parent = gui
+
+-- window: 1px dark outline, 1px light border, body
+local win = layered(holder, 0, 0, W, H, { C.outline, C.border, C.window })
+win.Active = true
+local uiScale = Instance.new("UIScale")
+uiScale.Scale = SCALE
+uiScale.Parent = win
+
+---------------------------------------------------------------- title bar
+frame(win, 2, 2, W - 4, 25, C.titlebar)  -- rows 2-26
+frame(win, 2, 27, W - 4, 1, C.accent)    -- accent line, row 27
+text(win, TITLE, 9, 1, 180, 25, HEAD)
+
+local grab = Instance.new("TextButton")      -- invisible drag handle over the title bar
+grab.BackgroundTransparency = 1
+grab.BorderSizePixel = 0
+grab.Text = ""
+grab.AutoButtonColor = false
+grab.Position = UDim2.fromOffset(2, 2)
+grab.Size = UDim2.fromOffset(W - 4, 25)
+grab.ZIndex = 5
+grab.Parent = win
+
+---------------------------------------------------------------- group box + labels
+layered(win, 10, 40, 281, 184, { C.outline, C.border, C.group })
+
+-- "Login" cuts the top border: label bg = group color, width = exact text width
+local login = text(win, "Login", 18, 34, 0, 15, BODY)
+login.AutomaticSize = Enum.AutomaticSize.X
+login.BackgroundTransparency = 0
+login.BackgroundColor3 = C.group
+login.ZIndex = 4
+
+text(win, "Enter Key:", 18, 54, 200, 15, BODY)
+
+---------------------------------------------------------------- input
+layered(win, 18, 72, 265, 20, { C.border, C.inner, C.widget })
+
+local input = Instance.new("TextBox")
+input.BackgroundTransparency = 1
+input.BorderSizePixel = 0
+input.FontFace = FONT
+input.TextSize = BODY
+input.Text = ""
+input.PlaceholderText = "Type here"
+input.PlaceholderColor3 = C.hint
+input.TextColor3 = C.text
+input.TextXAlignment = Enum.TextXAlignment.Left
+input.ClearTextOnFocus = false
+input.Position = UDim2.fromOffset(22, 72)
+input.Size = UDim2.fromOffset(256, 20)
+input.ZIndex = 3
+input.Parent = win
+
+---------------------------------------------------------------- buttons + status
+local status = text(win, "", 18, 199, 260, 15, BODY)
+
+local function button(label, y, onClick)
+	local _, fill = layered(win, 18, y, 265, 20, { C.border, C.inner, C.widget })
+	local b = Instance.new("TextButton")
+	b.BackgroundTransparency = 1
+	b.BorderSizePixel = 0
+	b.AutoButtonColor = false
+	b.FontFace = FONT
+	b.TextSize = BODY
+	b.Text = label
+	b.TextColor3 = C.text
+	b.Position = UDim2.fromOffset(18, y)
+	b.Size = UDim2.fromOffset(265, 20)
+	b.ZIndex = 3
+	b.Parent = win
+	b.MouseEnter:Connect(function() fill.BackgroundColor3 = C.hover end)
+	b.MouseLeave:Connect(function() fill.BackgroundColor3 = C.widget end)
+	b.MouseButton1Down:Connect(function() fill.BackgroundColor3 = C.press end)
+	b.MouseButton1Up:Connect(function() fill.BackgroundColor3 = C.hover end)
+	b.MouseButton1Click:Connect(onClick)
+end
+
+local function copied(url)
+	copy(url)
+	status.Text = "URL copied to your clipboard"
+end
+
+button("Confirm",               97,  function() onConfirm(input.Text) end)
+button("Get Key (Linkvertise)", 122, function() copied(LINKVERTISE_URL) end)
+button("Get Key (Lootlabs)",    147, function() copied(LOOTLABS_URL) end)
+button("Copy Discord Invite",   172, function() copied(DISCORD_URL) end)
+
+input.FocusLost:Connect(function(enterPressed)
+	if enterPressed then onConfirm(input.Text) end
+end)
+
+text(win, FOOTER_TEXT, 0, 223, W, 15, BODY, Enum.TextXAlignment.Center)
+
+---------------------------------------------------------------- dragging
+local dragging, dragStart, startPos
+grab.InputBegan:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+		dragging, dragStart, startPos = true, i.Position, holder.Position
+	end
+end)
+local c1 = UserInputService.InputChanged:Connect(function(i)
+	if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+		local d = i.Position - dragStart
+		holder.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+	end
+end)
+local c2 = UserInputService.InputEnded:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+		dragging = false
+	end
+end)
+gui.Destroying:Connect(function()
+	c1:Disconnect()
+	c2:Disconnect()
+end)
